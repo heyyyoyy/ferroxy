@@ -1,12 +1,15 @@
 [package]
 name = "ferroxy"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
+publish = false
 
 [dependencies]
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["full"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
+serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.54.1", features = ["full"] }
+toml = "1.1.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }

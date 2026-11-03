@@ -1,6 +1,26 @@
-use std::str::FromStr;
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use serde::Deserialize;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("failed to read config `{path}`")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invalid config `{path}`")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -12,7 +32,7 @@ pub struct Config {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
-    pub https_listen: String,
+    pub https_listen: SocketAddr,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,8 +50,25 @@ impl FromStr for Config {
     }
 }
 
+impl Config {
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        let path = path.as_ref();
+        let text = std::fs::read_to_string(path).map_err(|err| ConfigError::Io {
+            path: path.to_path_buf(),
+            source: err,
+        })?;
+        let config: Self = text.parse().map_err(|err| ConfigError::Parse {
+            path: path.to_path_buf(),
+            source: err,
+        })?;
+        Ok(config)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
 
     const MINIMAL: &str = r#"
@@ -47,7 +84,12 @@ upstream = "http://127.0.0.1:3000"
     fn parses_minimal_config() {
         let cfg: Config = MINIMAL.parse().expect("valid config");
 
-        assert_eq!(cfg.server.https_listen, "127.0.0.1:8443");
+        assert_eq!(
+            cfg.server.https_listen,
+            "127.0.0.1:8443"
+                .parse::<SocketAddr>()
+                .expect("socket address")
+        );
         assert_eq!(cfg.routes.len(), 1);
         assert_eq!(cfg.routes[0].host, "example.com");
         assert_eq!(cfg.routes[0].upstream, "http://127.0.0.1:3000");
@@ -169,5 +211,60 @@ https_listen = "127.0.0.1:8443"
     fn rejects_malformed_toml() {
         assert!("[server".parse::<Config>().is_err());
         assert!("https_listen = 42".parse::<Config>().is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_https_listen_values() {
+        for value in [
+            "not-an-address",
+            "127.0.0.1",
+            "127.0.0.1:99999",
+            "localhost:8443",
+            "",
+        ] {
+            let doc = format!(
+                r#"
+[server]
+https_listen = "{value}"
+
+[[routes]]
+host = "example.com"
+upstream = "http://127.0.0.1:3000"
+"#
+            );
+
+            let err = doc.parse::<Config>().unwrap_err().to_string();
+
+            assert!(
+                err.contains("invalid socket address"),
+                "value `{value}` produced: {err}"
+            );
+        }
+    }
+
+    fn write_config(dir: &Path, contents: &str) -> PathBuf {
+        let path = dir.join("config.toml");
+        std::fs::write(&path, contents).expect("write fixture");
+        path
+    }
+
+    #[test]
+    fn load_reads_valid_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_config(dir.path(), MINIMAL);
+
+        let cfg = Config::load(&path).expect("valid file");
+        assert_eq!(cfg.routes.len(), 1);
+    }
+
+    #[test]
+    fn load_reports_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("absent.toml");
+
+        let err = Config::load(&path).unwrap_err();
+
+        assert_matches!(&err, ConfigError::Io { .. }, "unexpected: {err}");
+        assert!(err.to_string().contains("absent.toml"), "{err}");
     }
 }

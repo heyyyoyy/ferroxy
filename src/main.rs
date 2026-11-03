@@ -1,6 +1,7 @@
-use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::process::ExitCode;
+use std::{convert::Infallible, path::PathBuf};
 
+use clap::Parser;
 use hyper::{Request, Response, body::Bytes, server::conn::http1, service::service_fn};
 use tokio::net::TcpListener;
 
@@ -8,6 +9,17 @@ use http_body_util::Full;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tracing::{Instrument, debug, error, info, info_span};
 use tracing_subscriber::EnvFilter;
+
+#[derive(Debug, clap::Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
+struct Cli {
+    /// Path to the configuration file
+    #[arg(long, default_value = "config.toml")]
+    config: PathBuf,
+    /// Validate the configuration and exit
+    #[arg(long)]
+    check: bool,
+}
 
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -19,12 +31,27 @@ fn init_tracing() {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    init_tracing();
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("error: {err:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    let addr: SocketAddr = ([127, 0, 0, 1], 3000).into();
-    let listener = TcpListener::bind(addr).await?;
-    info!(listen_addr = %addr, "listener started on http://{}", addr);
+async fn run() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    if cli.check {
+        let cfg = ferroxy::config::Config::load(&cli.config)?;
+        eprintln!("config ok: {} routes", cfg.routes.len());
+        return Ok(());
+    }
+    init_tracing();
+    let cfg = ferroxy::config::Config::load(&cli.config)?;
+    let listener = TcpListener::bind(cfg.server.https_listen).await?;
+    info!(listen_addr = %cfg.server.https_listen, "listener started on http://{}", cfg.server.https_listen);
     loop {
         let (socket, peer) = listener.accept().await?;
         let io = TokioIo::new(socket);

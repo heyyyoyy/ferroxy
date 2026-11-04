@@ -1,7 +1,7 @@
 default:
     @just --list
 
-verify: fmt clippy test
+verify: fmt clippy doc test
 
 fmt:
     cargo fmt --all -- --check
@@ -15,3 +15,6 @@ test:
 fix:
     cargo fmt --all
     cargo clippy --all-targets --fix --allow-dirty
+
+doc:
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
